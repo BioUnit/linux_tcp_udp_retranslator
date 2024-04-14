@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <semaphore.h>
 
 
 #define MAX_PACKET_LENGHT 128
@@ -45,7 +46,7 @@ FILE *log_file;
 char *log_file_path;
 
 pthread_mutex_t q_counter_lock;
-
+sem_t message_counter_sem;
 
 int main(int argc, char **argv){
    /* main() parameters parse handling group */
@@ -142,6 +143,7 @@ int main(int argc, char **argv){
       printf("ERROR: cannot create TCP socket\r\n");
       return -1;
    }
+
    if(connect(tcp_sockfd, (struct sockaddr*)&tcp_sock_addr, sizeof(tcp_sock_addr))){
       printf("ERROR: Cannot create TCP connection\r\n");
       printf("Is server active?\r\n");
@@ -151,10 +153,14 @@ int main(int argc, char **argv){
          printf("ERROR: Mutex init failed\r\n");
          return -1;
       }
-      if( pthread_create(&tcp_thread_id, NULL, tcp_transmit_thread, 0) !=0 ){
+      if( sem_init(&message_counter_sem, 0, 0) != 0 ){
+         printf("ERROR: Cannot create semaphore\r\n");
+         return -1;
+      }
+      if( pthread_create(&tcp_thread_id, NULL, tcp_transmit_thread, 0) != 0 ){
          printf("ERROR: Cannot create thread\r\n");
          return -1;
-       }
+      }
    }
 
    while(1){
@@ -178,6 +184,7 @@ void* tcp_transmit_thread(void*){
    char buffer[MAX_PACKET_LENGHT + 4];
    // Event invocation ?
    while(1){
+      sem_wait(&message_counter_sem);
       if(queue_counter > 0){
          if(message_queue[queue_current_read].pointer == NULL){
             printf("ERROR: Cannnot send message with NULL pointer\r\n");
@@ -209,6 +216,7 @@ void* tcp_transmit_thread(void*){
                      printf("ERROR: Cannot create TCP connection\r\n");
                      printf("Is server active?\r\n");
                      sleep(3);
+                     sem_post(&message_counter_sem);  // posting sem to be able to return back here
                   } else {
                      printf("Connection reestablished\r\n");
                      pthread_mutex_lock(&q_counter_lock);
@@ -285,6 +293,7 @@ void* udp_receive_thread(void*){
                 pthread_mutex_lock(&q_counter_lock);
                 queue_counter++;
                 pthread_mutex_unlock(&q_counter_lock);
+                sem_post(&message_counter_sem);
             }
          } else {
             printf("WARNING: Queue buffer is full\r\n");
